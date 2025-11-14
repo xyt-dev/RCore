@@ -1,0 +1,8 @@
+target/*
+.vscode/
+build/asm
+build/bin
+build/elf
+src/bin
+.idea/
+Cargo.lock
