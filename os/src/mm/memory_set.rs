@@ -4,9 +4,7 @@ use super::{frame_alloc, FrameTracker};
 use super::{PTEFlags, PageTable, PageTableEntry};
 use super::{PhysAddr, PhysPageNum, VirtAddr, VirtPageNum};
 use super::{StepByOne, VPNRange};
-use crate::config::{
-    KERNEL_STACK_SIZE, MEMORY_END, PAGE_SIZE, TRAMPOLINE, TRAP_CONTEXT_BASE, USER_STACK_SIZE,
-};
+use crate::config::{MEMORY_END, PAGE_SIZE, TRAMPOLINE, TRAP_CONTEXT_BASE, USER_STACK_SIZE};
 use crate::sync::UPSafeCell;
 use alloc::collections::BTreeMap;
 use alloc::sync::Arc;
@@ -63,6 +61,21 @@ impl MemorySet {
             None,
         );
     }
+    /// remove a area
+    pub fn remove_area_with_start_vpn(&mut self, start_vpn: VirtPageNum) {
+        if let Some((idx, area)) = self
+            .areas
+            .iter_mut()
+            .enumerate()
+            .find(|(_, area)| area.vpn_range.get_start() == start_vpn)
+        {
+            area.unmap(&mut self.page_table);
+            self.areas.remove(idx);
+        }
+    }
+    /// Add a new MapArea into this MemorySet.
+    /// Assuming that there are no conflicts in the virtual address
+    /// space.
     fn push(&mut self, mut map_area: MapArea, data: Option<&[u8]>) {
         // map_area.map():
         // 为map_area虚拟内存范围内页表建立与物理帧的映射关系
@@ -228,18 +241,47 @@ impl MemorySet {
             elf.header.pt2.entry_point() as usize,
         )
     }
+    /// Create a new address space by copy code&data from a exited process's address space.
+    pub fn from_existed_user(user_space: &Self) -> Self {
+        let mut memory_set = Self::new_bare();
+        // map trampoline
+        memory_set.map_trampoline();
+        // copy data sections/trap_context/user_stack
+        for area in user_space.areas.iter() {
+            let new_area = MapArea::from_another(area);
+            memory_set.push(new_area, None);
+            // copy data from another space
+            for vpn in area.vpn_range {
+                let src_ppn = user_space.translate(vpn).unwrap().ppn();
+                let dst_ppn = memory_set.translate(vpn).unwrap().ppn();
+                dst_ppn
+                    .get_bytes_array()
+                    .copy_from_slice(src_ppn.get_bytes_array());
+            }
+        }
+        memory_set
+    }
     /// Change page table by writing satp CSR Register.
     pub fn activate(&self) {
         let satp = self.page_table.token();
         unsafe {
             satp::write(satp);
             asm!("sfence.vma");
+            // sfence.vma:
+            // 1. 刷新 TLB (Invalidate TLBo)
+            // 2. 同步指令流水线 (Synchronize Pipeline)：确保在它之前的所有关于页表设置的操作（主要是写 satp）都已完成。并且在它之后的所有指令取指和内存访问都将看到新的 satp 设置并重新进行地址翻译。它有效地清空了指令流水线中在旧模式下预取的内容。（此处作用主要是这点）
         }
     }
     /// Translate a virtual page number to a page table entry
     pub fn translate(&self, vpn: VirtPageNum) -> Option<PageTableEntry> {
         self.page_table.translate(vpn)
     }
+
+    ///Remove all `MapArea`
+    pub fn recycle_data_pages(&mut self) {
+        self.areas.clear();
+    }
+
     /// shrink the area to new_end
     #[allow(unused)]
     pub fn shrink_to(&mut self, start: VirtAddr, new_end: VirtAddr) -> bool {
@@ -292,6 +334,14 @@ impl MapArea {
             data_frames: BTreeMap::new(),
             map_type,
             map_perm,
+        }
+    }
+    pub fn from_another(another: &Self) -> Self {
+        Self {
+            vpn_range: VPNRange::new(another.vpn_range.get_start(), another.vpn_range.get_end()),
+            data_frames: BTreeMap::new(),
+            map_type: another.map_type,
+            map_perm: another.map_perm,
         }
     }
     pub fn map_one(&mut self, page_table: &mut PageTable, vpn: VirtPageNum) {
@@ -386,12 +436,7 @@ bitflags! {
     }
 }
 
-/// Return (bottom, top) of a kernel stack in kernel space.
-pub fn kernel_stack_position(app_id: usize) -> (usize, usize) {
-    let top = TRAMPOLINE - app_id * (KERNEL_STACK_SIZE + PAGE_SIZE);
-    let bottom = top - KERNEL_STACK_SIZE;
-    (bottom, top)
-}
+// kernel_stack_position 移动至 pid.rs
 
 /// remap test in kernel space
 #[allow(unused)]

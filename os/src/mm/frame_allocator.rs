@@ -1,6 +1,5 @@
 //! Implementation of [`FrameAllocator`] which
 //! controls all the frames in the operating system.
-
 use super::{PhysAddr, PhysPageNum};
 use crate::config::MEMORY_END;
 use crate::sync::UPSafeCell;
@@ -48,7 +47,7 @@ trait FrameAllocator {
 pub struct StackFrameAllocator {
     current: usize,
     end: usize,
-    recycled: Vec<usize>, // 使用 buddy system
+    recycled: Vec<usize>, // 只是使用 buddy system 记录页帧号
 }
 
 impl StackFrameAllocator {

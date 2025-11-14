@@ -24,12 +24,15 @@ OBJDUMP := rust-objdump --arch-name=riscv64
 OBJCOPY := rust-objcopy --binary-architecture=riscv64
 
 # CHAPTER ?= $(shell git rev-parse --abbrev-ref HEAD | sed -E 's/ch([0-9])/\1/')
-CHAPTER = 4
+CHAPTER = 5
 TEST ?= $(CHAPTER)
 BASE ?= 1
 
 # Disassembly
 DISASM ?= -x
+
+# Run usertests or usershell
+TEST ?=
 
 build:  $(KERNEL_BIN)
 
